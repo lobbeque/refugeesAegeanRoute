@@ -1,0 +1,506 @@
+<!doctype><html><head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Odyssey.js Slides</title>
+  <meta name="description" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="icon" type="image/x-icon" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+  <link rel="icon" type="image/png" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+
+  <link rel="stylesheet" href="cartodb.css">
+  <link rel="stylesheet" href="slides.css">
+  <script src="http://cartodb.github.io/odyssey.js/vendor/modernizr-2.6.2.min.js"></script>
+</head>
+<body>
+  <div id="map" style="width: 100%; height: 100%;"></div>
+
+  <div class="background"></div>
+
+  <ul id="navButtons">
+    <li class="nav-prev">
+    <li class="nav-next">
+  </ul>
+
+  <div id="slides_container" style="display:block;">
+    <div id="slides"></div>
+  </div>
+
+  <div id="dots"></div>
+
+  <div id="credits">
+    <span class="title" id="title">Title</span>
+    <span class="author"><strong id="author">By Name using</strong> <a href="http://cartodb.github.io/odyssey.js/">Odyssey.js</a><span>
+  </span></span></div>
+
+  <script src="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/cartodb.js"></script>
+  <script src="http://cartodb.github.io/odyssey.js/dist/odyssey.js" charset="UTF-8"></script>
+
+  <script>
+    var resizePID;
+
+    function clearResize() {
+      clearTimeout(resizePID);
+      resizePID = setTimeout(function() { adjustSlides(); }, 100);
+    }
+
+    if (!window.addEventListener) {
+      window.attachEvent("resize", function load(event) {
+        clearResize();
+      });
+    } else {
+      window.addEventListener("resize", function load(event) {
+        clearResize();
+      });
+    }
+
+    function adjustSlides() {
+      var container = document.getElementById("slides_container"),
+          slide = document.querySelectorAll('.selected_slide')[0];
+
+      if (slide) {
+        if (slide.offsetHeight+169+40+80 >= window.innerHeight) {
+          container.style.bottom = "80px";
+
+          var h = container.offsetHeight;
+
+          slide.style.height = h-169+"px";
+          slide.classList.add("scrolled");
+        } else {
+          container.style.bottom = "auto";
+          container.style.minHeight = "0";
+
+          slide.style.height = "auto";
+          slide.classList.remove("scrolled");
+        }
+      }
+    }
+
+    var resizeAction = O.Action(function() {
+      function imageLoaded() {
+        counter--;
+
+        if (counter === 0) {
+          adjustSlides();
+        }
+      }
+      var images = $('img');
+      var counter = images.length;
+
+      images.each(function() {
+        if (this.complete) {
+          imageLoaded.call( this );
+        } else {
+          $(this).one('load', imageLoaded);
+        }
+      });
+    });
+
+    function click(el) {
+      var element = O.Core.getElement(el);
+      var t = O.Trigger();
+
+      // TODO: clean properly
+      function click() {
+        t.trigger();
+      }
+
+      if (element) element.onclick = click;
+
+      return t;
+    }
+
+    O.Template({
+      init: function() {
+        var seq = O.Triggers.Sequential();
+
+        var baseurl = this.baseurl = 'http://{s}.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+        var map = this.map = L.map('map').setView([0, 0.0], 5);
+        var basemap = this.basemap = L.tileLayer(baseurl, {
+          attribution: 'data OSM - map CartoDB'
+        }).addTo(map);
+
+        // enanle keys to move
+        O.Keys().on('map').left().then(seq.prev, seq)
+        O.Keys().on('map').right().then(seq.next, seq)
+
+        click(document.querySelectorAll('.next')).then(seq.next, seq)
+        click(document.querySelectorAll('.prev')).then(seq.prev, seq)
+
+        var slides = O.Actions.Slides('slides');
+        var story = O.Story()
+
+        this.story = story;
+        this.seq = seq;
+        this.slides = slides;
+        this.progress = O.UI.DotProgress('dots').count(0);
+      },
+
+      update: function(actions) {
+        var self = this;
+
+        if (!actions.length) return;
+
+        this.story.clear();
+
+        if (this.baseurl && (this.baseurl !== actions.global.baseurl)) {
+          this.baseurl = actions.global.baseurl || 'http://0.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+
+          this.basemap.setUrl(this.baseurl);
+        }
+
+        if (this.cartoDBLayer && ("http://"+self.cartoDBLayer.options.user_name+".cartodb.com/api/v2/viz/"+self.cartoDBLayer.options.layer_definition.stat_tag+"/viz.json" !== actions.global.vizjson)) {
+          this.map.removeLayer(this.cartoDBLayer);
+
+          this.cartoDBLayer = null;
+          this.created = false;
+        }
+
+        if (actions.global.vizjson && !this.cartoDBLayer) {
+          if (!this.created) { // sendCode debounce < vis loader
+            cdb.vis.Loader.get(actions.global.vizjson, function(vizjson) {
+              self.map.fitBounds(vizjson.bounds);
+
+              cartodb.createLayer(self.map, vizjson)
+                .done(function(layer) {
+                  self.cartoDBLayer = layer;
+
+                  var sublayer = layer.getSubLayer(0),
+                      layer_name = layer.layers[0].options.layer_name,
+                      filter = actions.global.cartodb_filter ? " WHERE "+actions.global.cartodb_filter : "";
+
+                  sublayer.setSQL("SELECT * FROM "+layer_name+filter)
+
+                  self.map.addLayer(layer);
+
+                  self._resetActions(actions);
+                }).on('error', function(err) {
+                  console.log("some error occurred: " + err);
+                });
+            });
+
+            this.created = true;
+          }
+
+          return;
+        }
+
+        this._resetActions(actions);
+      },
+
+      _resetActions: function(actions) {
+        // update footer title and author
+        var title_ = actions.global.title === undefined ? '' : actions.global.title,
+            author_ = actions.global.author === undefined ? 'Using' : 'By '+actions.global.author+' using';
+
+        document.getElementById('title').innerHTML = title_;
+        document.getElementById('author').innerHTML = author_;
+        document.title = title_ + " | " + author_ +' Odyssey.js';
+
+        var sl = actions;
+
+        document.getElementById('slides').innerHTML = ''
+        this.progress.count(sl.length);
+
+        // create new story
+        for(var i = 0; i < sl.length; ++i) {
+          var slide = sl[i];
+          var tmpl = "<div class='slide' style='diplay:none'>";
+
+          tmpl += slide.html();
+          tmpl += "</div>";
+          document.getElementById('slides').innerHTML += tmpl;
+
+          this.progress.step(i).then(this.seq.step(i), this.seq)
+
+          var actions = O.Parallel(
+            this.slides.activate(i),
+            slide(this),
+            this.progress.activate(i),
+            resizeAction
+          );
+
+          actions.on("finish.app", function() {
+            adjustSlides();
+          });
+
+          this.story.addState(
+            this.seq.step(i),
+            actions
+          )
+        }
+
+        this.story.go(this.seq.current());
+      },
+
+      changeSlide: function(n) {
+        this.seq.current(n);
+      }
+    });
+  </script>
+
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-20934186-21', 'cartodb.github.io');
+    ga('send', 'pageview');
+  </script>
+
+  <script type="text/javascript" src="http://fast.fonts.net/jsapi/3af16084-ba56-49ca-b37d-0b49b59e1927.js"></script>
+
+<script type="text/template" id="md_template">```
+-title: "Refugees Aegean Route"
+-baseurl: "http://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+-vizjson: "https://lobbeque.cartodb.com/api/v2/viz/10f437ba-bf94-11e5-9a37-0e31c9be1b51/viz.json"
+```
+
+# Refugees Aegean Route
+
+```
+- center: [44.9803, 17.9517]
+- zoom: 5
+L.marker([38.4439, 27.1651]).actions.addRemove(S.map)
+L.marker([39.4961, 26.1193]).actions.addRemove(S.map)
+L.marker([39.4314, 26.2539]).actions.addRemove(S.map)
+L.marker([39.4806, 26.3643]).actions.addRemove(S.map)
+L.marker([39.4314, 26.4132]).actions.addRemove(S.map)
+L.marker([39.4064, 26.4151]).actions.addRemove(S.map)
+L.marker([39.3794, 26.1824]).actions.addRemove(S.map)
+L.marker([39.2687, 26.2879]).actions.addRemove(S.map)
+L.marker([37.0738, 25.4787]).actions.addRemove(S.map)
+L.marker([38.0078, 23.7233]).actions.addRemove(S.map)
+L.marker([41.3103, 22.8111]).actions.addRemove(S.map)
+L.marker([41.5209, 21.9342]).actions.addRemove(S.map)
+L.marker([47.4634, 19.1135]).actions.addRemove(S.map)
+L.marker([47.7088, 16.6017]).actions.addRemove(S.map)
+L.marker([48.1853, 16.3655]).actions.addRemove(S.map)
+L.marker([51.7440, 11.0687]).actions.addRemove(S.map)
+```
+
+In European refugees maps, the personal journeys of many are aggregated and the difficult processes of going from one point to the others are translated into uninterrupted lines. As part of our effort to see how refugees’ journeys might be framed differently - by paying attention to the experiences of others, rather than a self-reflexive gaze - we decided to zoom in, troubling this notion of uninterrupted, generalized lines and linear progression towards a goal. 
+
+We sought out individual stories told from the perspective of the people taking the journey by looking for Arab documentary videos that describe the trip.
+
+# Refugees gather
+
+```
+- center: [38.4439, 27.1651]
+- zoom: 9
+L.marker([38.4439, 27.1651]).actions.addRemove(S.map)
+```
+
+At Izmir they buy sea safe means for 20$
+![](http://i.imgur.com/Bo3A7hs.png)
+# Meeting at the secret point
+
+```
+- center: [39.4961, 26.1193]
+- zoom: 9
+L.marker([39.4961, 26.1193]).actions.addRemove(S.map)
+```
+
+They travel along hidden roads
+![](http://i.imgur.com/NfKuajJ.png)
+
+# Collect people in the forest
+
+```
+- center: [39.4961, 26.1193]
+- zoom: 10
+L.marker([39.4961, 26.1193]).actions.addRemove(S.map)
+```
+
+Then get into animal truck
+![](http://i.imgur.com/gPYoOuL.png)
+
+
+# Refugees get ready
+
+```
+- center: [39.4961, 26.1193]
+- zoom: 11
+L.marker([39.4961, 26.1193]).actions.addRemove(S.map)
+```
+
+Finally the start to carry the boat
+![](http://i.imgur.com/W69gju4.png)
+
+# Refugees get into plastic boat
+
+```
+- center: [39.4961, 26.1193]
+- zoom: 12
+L.marker([39.4961, 26.1193]).actions.addRemove(S.map)
+```
+
+The boat contains 43 refugees, crossing cost 1200$ for each refugee
+![](http://i.imgur.com/X29anCs.png)
+
+# Engine stops
+
+```
+- center: [39.4314, 26.2539]
+- zoom: 12
+L.marker([39.4314, 26.2539]).actions.addRemove(S.map)
+```
+
+Problems happen
+![](http://i.imgur.com/bhKtotW.png)
+
+# Return to Turkish coast
+
+```
+- center: [39.4806, 26.3643]
+- zoom: 12
+L.marker([39.4806, 26.3643]).actions.addRemove(S.map)
+```
+
+Problems happen
+![](http://i.imgur.com/LY3U8tJ.png) 
+
+# Second attempt to cross
+
+```
+- center: [39.4314, 26.4132]
+- zoom: 12
+L.marker([39.4314, 26.4132]).actions.addRemove(S.map)
+```
+Preparing to cross again
+![](http://i.imgur.com/WWj580S.png)
+
+# Turkish coast guards approach
+
+```
+- center: [39.4064, 26.4151]
+- zoom: 12
+L.marker([39.4064, 26.4151]).actions.addRemove(S.map)
+```
+
+Problems happen
+![](http://i.imgur.com/GkSCom6.png) 
+
+# Succeeded in crossing
+
+```
+- center: [39.3794, 26.1824]
+- zoom: 11
+L.marker([39.3794, 26.1824]).actions.addRemove(S.map)
+```
+Crossing European borders
+![](http://i.imgur.com/R0cochJ.png)
+
+# Reaching Greece
+
+```
+- center: [39.2687, 26.2879]
+- zoom: 10
+L.marker([39.2687, 26.2879]).actions.addRemove(S.map)
+```
+
+Refugees arrive in Europe reaching Lesbos.
+![](http://i.imgur.com/FjBsc4S.png)
+
+# Refugees travel to Athena
+
+```
+- center: [37.0738, 25.4787]
+- zoom: 8
+L.marker([37.0738, 25.4787]).actions.addRemove(S.map)
+```
+
+Buy boat tickets and go, 80€ for each refugee
+![](http://i.imgur.com/HPBQ0V0.png)
+
+# Refugees arrive in Athena
+
+```
+- center: [38.0078, 23.7233]
+- zoom: 9
+L.marker([38.0078, 23.7233]).actions.addRemove(S.map)
+```
+
+They start looking for a bus
+![](http://i.imgur.com/JExW40b.png)
+
+# Refugees mount in the buses
+
+```
+- center: [37.9438, 23.6795]
+- zoom: 9
+L.marker([37.9438, 23.6795]).actions.addRemove(S.map)
+```
+
+Going to Macedonia by buses, 45€ for each refugee
+![](http://i.imgur.com/E5S0pXj.png)
+
+# Refugees try to cross border
+
+```
+- center: [41.3103, 22.8111]
+- zoom: 7
+L.marker([41.3103, 22.8111]).actions.addRemove(S.map)
+```
+
+Trying to cross Greece borders to Macedonia
+![](http://i.imgur.com/3HnqrKj.png)
+
+
+# Refugees walk
+
+```
+- center: [41.5158, 21.9411]
+- zoom: 7
+L.marker([41.5209, 21.9342]).actions.addRemove(S.map)
+```
+
+Move through Serbia, buy food for 200€
+![](http://i.imgur.com/9GuxM7a.png)
+
+# Running through Hungary to reach Austria
+
+```
+- center: [47.4634, 19.1135]
+- zoom: 7
+L.marker([47.4634, 19.1135]).actions.addRemove(S.map)
+```
+
+Try to avoid making a finger print in Hungary and then take a taxi from Belgrade to Hungarian borders for 500€
+![](http://i.imgur.com/cgKMQpJ.png)
+
+# Reach Austrian borders
+
+```
+- center: [47.7088, 16.6017]
+- zoom: 7
+L.marker([47.7088, 16.6017]).actions.addRemove(S.map)
+```
+
+Take a taxi from Budapest to Austrian borders for 500€
+![](http://i.imgur.com/zOZ6YSV.png)
+
+# Reach Vienna
+
+```
+- center: [48.1853, 16.3655]
+- zoom: 7
+L.marker([48.1853, 16.3655]).actions.addRemove(S.map)
+```
+
+Take a taxi from Austrian borders to Vienna for 200€
+![](http://i.imgur.com/j5mHaIe.png)
+
+# To Germany …
+
+```
+- center: [51.7440, 11.0687]
+- zoom: 6
+L.marker([51.7440, 11.0687]).actions.addRemove(S.map)
+```
+
+Finaly take a taxi from Vienna to Germany borders for 500€. Total cost is 1345$ and 2000€ for each refugee.
+ 
+
+</script></body></html>
